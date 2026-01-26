@@ -28,7 +28,7 @@ def get_train_val_test_filelists(listpath):
     train_filelist = [] 
     val_filelist = [] 
     test_filelist = [] 
-    for  f in filelist: 
+    for f in filelist: 
         line_entries = f[0].split(sep=", ") 
         if line_entries[0] == '1': 
             train_filelist.append(f) 
@@ -36,6 +36,7 @@ def get_train_val_test_filelists(listpath):
             val_filelist.append(f) 
         if line_entries[0] == '3': 
             test_filelist.append(f) 
+            
     return  train_filelist, val_filelist, test_filelist 
 
 
