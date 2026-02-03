@@ -1,6 +1,6 @@
 """
-STANDALONE KAGGLE SCRIPT FOR DSen2-CR
-This script bypasses import caching issues by being completely self-contained.
+STANDALONE KAGGLE SCRIPT FOR DSen2-CR CLOUD REMOVAL
+Final version - All compatibility issues fixed
 
 Just copy-paste this entire file into a Kaggle code cell and run!
 """
@@ -11,17 +11,16 @@ import numpy as np
 import tifffile
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
-import tensorflow as tf
 
 # Keras/TensorFlow imports
 import keras.backend as K
-from keras.models import load_model, Model
+from keras.models import Model
 from keras.layers import Conv2D, Concatenate, Activation, Lambda, Add, Input
 
 K.set_image_data_format('channels_first')
 
 # ============================================================================
-# DSen2-CR MODEL ARCHITECTURE
+# DSen2-CR MODEL ARCHITECTURE (Simplified for Keras 3.x compatibility)
 # ============================================================================
 
 def resBlock(input_l, feature_size, kernel_size, scale=0.1):
@@ -33,33 +32,30 @@ def resBlock(input_l, feature_size, kernel_size, scale=0.1):
     return Add()([input_l, tmp])
 
 
-def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256,
-                  use_cloud_mask=True, include_sar_input=True):
-    """DSen2-CR Model Architecture"""
+def DSen2CR_model(input_shape, num_layers=16, feature_size=256):
+    """
+    DSen2-CR Model Architecture
+    Simplified version without cloud mask for Keras 3.x compatibility
+    """
     input_opt = Input(shape=input_shape[0])
     input_sar = Input(shape=input_shape[1])
     
-    if include_sar_input:
-        x = Concatenate(axis=1)([input_opt, input_sar])
-    else:
-        x = input_opt
+    # Concatenate optical and SAR inputs
+    x = Concatenate(axis=1)([input_opt, input_sar])
     
+    # Initial convolution
     x = Conv2D(feature_size, (3, 3), kernel_initializer='he_uniform', padding='same')(x)
     x = Activation('relu')(x)
     
+    # Residual blocks
     for i in range(num_layers):
         x = resBlock(x, feature_size, kernel_size=[3, 3])
     
+    # Final convolution
     x = Conv2D(input_shape[0][0], (3, 3), kernel_initializer='he_uniform', padding='same')(x)
-    x = Add()([x, input_opt])
     
-    if use_cloud_mask:
-        # Use Keras backend instead of TensorFlow for compatibility
-        shape_n = K.shape(input_opt)
-        def concatenate_array(x):
-            return K.concatenate([x, K.zeros(shape=(batch_per_gpu, 1, shape_n[2], shape_n[3]))], axis=1)
-        x = Concatenate(axis=1)([x, input_opt])
-        x = Lambda(concatenate_array)(x)
+    # Long skip connection
+    x = Add()([x, input_opt])
     
     model = Model(inputs=[input_opt, input_sar], outputs=x)
     return model
@@ -209,11 +205,8 @@ def run_prediction():
     input_shape = ((13, H, W), (2, H, W))
     model = DSen2CR_model(
         input_shape,
-        batch_per_gpu=1,
         num_layers=16,
-        feature_size=256,
-        use_cloud_mask=True,
-        include_sar_input=True
+        feature_size=256
     )
     print(f"  ✓ Model architecture built")
     
@@ -224,14 +217,19 @@ def run_prediction():
         print(f"  ✓ Weights loaded successfully")
     except Exception as e:
         print(f"  ⚠ Error loading weights: {e}")
-        print(f"  Trying to load as full model...")
-        model = load_model(MODEL_CHECKPOINT, compile=False)
-        print(f"  ✓ Model loaded")
+        raise
     
     # Run inference
     print(f"\n🚀 Running inference...")
     prediction = model.predict([input_opt, input_sar], batch_size=1, verbose=0)
-    output_normalized = prediction[0, 0:13, :, :]
+    
+    # Handle output shape - model outputs (1, 13, H, W)
+    if prediction.shape[1] == 13:
+        output_normalized = prediction[0]
+    else:
+        # If model outputs more channels (e.g., with cloud mask), take first 13
+        output_normalized = prediction[0, 0:13, :, :]
+    
     output_denormalized = denormalize_optical_image(output_normalized)
     
     print(f"  ✓ Prediction complete")
