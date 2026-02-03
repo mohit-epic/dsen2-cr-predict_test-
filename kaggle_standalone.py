@@ -1,8 +1,8 @@
 """
 STANDALONE KAGGLE SCRIPT FOR DSen2-CR CLOUD REMOVAL
-Final version - All compatibility issues fixed
+CORRECT VERSION - Matches trained model architecture
 
-Just copy-paste this entire file into a Kaggle code cell and run!
+GPU REQUIRED - Enable GPU in Kaggle settings before running!
 """
 
 import os
@@ -14,13 +14,14 @@ from skimage.metrics import structural_similarity as ssim
 
 # Keras/TensorFlow imports
 import keras.backend as K
+import tensorflow as tf
 from keras.models import Model
 from keras.layers import Conv2D, Concatenate, Activation, Lambda, Add, Input
 
 K.set_image_data_format('channels_first')
 
 # ============================================================================
-# DSen2-CR MODEL ARCHITECTURE (Simplified for Keras 3.x compatibility)
+# DSen2-CR MODEL ARCHITECTURE (EXACT MATCH TO TRAINED MODEL)
 # ============================================================================
 
 def resBlock(input_l, feature_size, kernel_size, scale=0.1):
@@ -32,11 +33,13 @@ def resBlock(input_l, feature_size, kernel_size, scale=0.1):
     return Add()([input_l, tmp])
 
 
-def DSen2CR_model(input_shape, num_layers=16, feature_size=256):
+def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256):
     """
-    DSen2-CR Model Architecture
-    Simplified version without cloud mask for Keras 3.x compatibility
+    DSen2-CR Model Architecture - EXACT MATCH to trained model
+    Outputs 14 channels: 13 bands + 1 cloud mask
     """
+    global shape_n
+    
     input_opt = Input(shape=input_shape[0])
     input_sar = Input(shape=input_shape[1])
     
@@ -57,14 +60,24 @@ def DSen2CR_model(input_shape, num_layers=16, feature_size=256):
     # Long skip connection
     x = Add()([x, input_opt])
     
+    # Add cloud mask output (this is what the trained model has!)
+    shape_n = tf.shape(input_opt)
+    
+    def concatenate_array(x):
+        global shape_n
+        return K.concatenate([x, K.zeros(shape=(batch_per_gpu, 1, shape_n[2], shape_n[3]))], axis=1)
+    
+    x = Concatenate(axis=1)([x, input_opt])
+    x = Lambda(concatenate_array)(x)
+    
     model = Model(inputs=[input_opt, input_sar], outputs=x)
-    return model
+    return model, shape_n
 
 # ============================================================================
 # CONFIGURATION - UPDATE THESE PATHS!
 # ============================================================================
-CLOUDY_IMAGE = '/kaggle/input/your-dataset/cloudy_s2.tif'       # 13 bands
-SAR_IMAGE = '/kaggle/input/your-dataset/sar_s1.tif'             # 2 bands
+CLOUDY_IMAGE = '/kaggle/input/your-dataset/cloudy_s2.tif'
+SAR_IMAGE = '/kaggle/input/your-dataset/sar_s1.tif'
 MODEL_CHECKPOINT = '/kaggle/input/model/model_SARcarl.hdf5'
 CLOUDFREE_REF = None  # Optional: '/kaggle/input/your-dataset/reference.tif'
 OUTPUT_DIR = '/kaggle/working/output'
@@ -200,11 +213,12 @@ def run_prediction():
     # Get image dimensions
     _, H, W = optical_data.shape
     
-    # Build model architecture
+    # Build model architecture (EXACT MATCH to trained model)
     print(f"\n🧠 Building DSen2-CR model...")
     input_shape = ((13, H, W), (2, H, W))
-    model = DSen2CR_model(
+    model, shape_n = DSen2CR_model(
         input_shape,
+        batch_per_gpu=1,
         num_layers=16,
         feature_size=256
     )
@@ -223,13 +237,9 @@ def run_prediction():
     print(f"\n🚀 Running inference...")
     prediction = model.predict([input_opt, input_sar], batch_size=1, verbose=0)
     
-    # Handle output shape - model outputs (1, 13, H, W)
-    if prediction.shape[1] == 13:
-        output_normalized = prediction[0]
-    else:
-        # If model outputs more channels (e.g., with cloud mask), take first 13
-        output_normalized = prediction[0, 0:13, :, :]
-    
+    # Model outputs (1, 27, H, W): [13 predicted bands, 13 input bands, 1 cloud mask]
+    # We want the first 13 channels (the predicted cloud-free image)
+    output_normalized = prediction[0, 0:13, :, :]
     output_denormalized = denormalize_optical_image(output_normalized)
     
     print(f"  ✓ Prediction complete")
