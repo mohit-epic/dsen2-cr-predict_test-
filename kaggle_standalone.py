@@ -54,7 +54,8 @@ def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256,
     x = Add()([x, input_opt])
     
     if use_cloud_mask:
-        shape_n = tf.shape(input_opt)
+        # Use Keras backend instead of TensorFlow for compatibility
+        shape_n = K.shape(input_opt)
         def concatenate_array(x):
             return K.concatenate([x, K.zeros(shape=(batch_per_gpu, 1, shape_n[2], shape_n[3]))], axis=1)
         x = Concatenate(axis=1)([x, input_opt])
