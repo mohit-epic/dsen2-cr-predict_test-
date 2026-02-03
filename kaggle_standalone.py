@@ -35,10 +35,24 @@ def resBlock(input_l, feature_size, kernel_size, scale=0.1):
 
 def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256):
     """
-    DSen2-CR Model Architecture - EXACT MATCH to trained model
-    Outputs 14 channels: 13 bands + 1 cloud mask
+    DSen2-CR Model Architecture - Keras 3.x compatible version
+    Outputs 27 channels: 13 predicted bands + 13 input bands + 1 cloud mask
     """
-    global shape_n
+    from keras.layers import Layer
+    
+    class CloudMaskLayer(Layer):
+        """Custom layer to add cloud mask channel"""
+        def __init__(self, **kwargs):
+            super(CloudMaskLayer, self).__init__(**kwargs)
+        
+        def call(self, inputs):
+            # inputs shape: (batch, channels, height, width)
+            batch_size = K.shape(inputs)[0]
+            height = K.shape(inputs)[2]
+            width = K.shape(inputs)[3]
+            # Create zero mask channel
+            zeros = K.zeros((batch_size, 1, height, width))
+            return K.concatenate([inputs, zeros], axis=1)
     
     input_opt = Input(shape=input_shape[0])
     input_sar = Input(shape=input_shape[1])
@@ -60,18 +74,12 @@ def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256)
     # Long skip connection
     x = Add()([x, input_opt])
     
-    # Add cloud mask output (this is what the trained model has!)
-    shape_n = tf.shape(input_opt)
-    
-    def concatenate_array(x):
-        global shape_n
-        return K.concatenate([x, K.zeros(shape=(batch_per_gpu, 1, shape_n[2], shape_n[3]))], axis=1)
-    
-    x = Concatenate(axis=1)([x, input_opt])
-    x = Lambda(concatenate_array)(x)
+    # Add cloud mask output - concatenate predicted + input + mask
+    x = Concatenate(axis=1)([x, input_opt])  # (batch, 26, H, W)
+    x = CloudMaskLayer()(x)  # (batch, 27, H, W)
     
     model = Model(inputs=[input_opt, input_sar], outputs=x)
-    return model, shape_n
+    return model
 
 # ============================================================================
 # CONFIGURATION - UPDATE THESE PATHS!
@@ -213,10 +221,10 @@ def run_prediction():
     # Get image dimensions
     _, H, W = optical_data.shape
     
-    # Build model architecture (EXACT MATCH to trained model)
+    # Build model architecture (Keras 3.x compatible)
     print(f"\n🧠 Building DSen2-CR model...")
     input_shape = ((13, H, W), (2, H, W))
-    model, shape_n = DSen2CR_model(
+    model = DSen2CR_model(
         input_shape,
         batch_per_gpu=1,
         num_layers=16,
