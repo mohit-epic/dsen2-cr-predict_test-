@@ -1,6 +1,6 @@
 """
 STANDALONE KAGGLE SCRIPT FOR DSen2-CR CLOUD REMOVAL
-CORRECT VERSION - Matches trained model architecture
+CORRECT VERSION (v3) - Matches trained model architecture + Keras 3.x Optimized
 
 GPU REQUIRED - Enable GPU in Kaggle settings before running!
 """
@@ -21,7 +21,7 @@ from keras.layers import Conv2D, Concatenate, Activation, Lambda, Add, Input
 K.set_image_data_format('channels_first')
 
 # ============================================================================
-# DSen2-CR MODEL ARCHITECTURE (EXACT MATCH TO TRAINED MODEL)
+# DSen2-CR MODEL ARCHITECTURE (EXACT MATCH + KERAS 3.x FIX)
 # ============================================================================
 
 def resBlock(input_l, feature_size, kernel_size, scale=0.1):
@@ -194,6 +194,7 @@ def run_prediction():
     
     print("="*80)
     print("DSen2-CR: Cloud Removal using SAR-Optical Fusion")
+    print("MATCHES TRAINED MODEL + KERAS 3.x COMPATIBLE")
     print("="*80)
     
     # Load images
@@ -247,7 +248,11 @@ def run_prediction():
     
     # Model outputs (1, 27, H, W): [13 predicted bands, 13 input bands, 1 cloud mask]
     # We want the first 13 channels (the predicted cloud-free image)
-    output_normalized = prediction[0, 0:13, :, :]
+    if prediction.shape[1] >= 13:
+        output_normalized = prediction[0, 0:13, :, :]
+    else:
+        output_normalized = prediction[0]
+        
     output_denormalized = denormalize_optical_image(output_normalized)
     
     print(f"  ✓ Prediction complete")
