@@ -11,14 +11,57 @@ import numpy as np
 import tifffile
 import matplotlib.pyplot as plt
 from skimage.metrics import structural_similarity as ssim
+import tensorflow as tf
 
 # Keras/TensorFlow imports
 import keras.backend as K
-from keras.models import load_model
+from keras.models import load_model, Model
 from keras.layers import Conv2D, Concatenate, Activation, Lambda, Add, Input
-from keras.models import Model
 
 K.set_image_data_format('channels_first')
+
+# ============================================================================
+# DSen2-CR MODEL ARCHITECTURE
+# ============================================================================
+
+def resBlock(input_l, feature_size, kernel_size, scale=0.1):
+    """Residual Block"""
+    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same')(input_l)
+    tmp = Activation('relu')(tmp)
+    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same')(tmp)
+    tmp = Lambda(lambda x: x * scale)(tmp)
+    return Add()([input_l, tmp])
+
+
+def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256,
+                  use_cloud_mask=True, include_sar_input=True):
+    """DSen2-CR Model Architecture"""
+    input_opt = Input(shape=input_shape[0])
+    input_sar = Input(shape=input_shape[1])
+    
+    if include_sar_input:
+        x = Concatenate(axis=1)([input_opt, input_sar])
+    else:
+        x = input_opt
+    
+    x = Conv2D(feature_size, (3, 3), kernel_initializer='he_uniform', padding='same')(x)
+    x = Activation('relu')(x)
+    
+    for i in range(num_layers):
+        x = resBlock(x, feature_size, kernel_size=[3, 3])
+    
+    x = Conv2D(input_shape[0][0], (3, 3), kernel_initializer='he_uniform', padding='same')(x)
+    x = Add()([x, input_opt])
+    
+    if use_cloud_mask:
+        shape_n = tf.shape(input_opt)
+        def concatenate_array(x):
+            return K.concatenate([x, K.zeros(shape=(batch_per_gpu, 1, shape_n[2], shape_n[3]))], axis=1)
+        x = Concatenate(axis=1)([x, input_opt])
+        x = Lambda(concatenate_array)(x)
+    
+    model = Model(inputs=[input_opt, input_sar], outputs=x)
+    return model
 
 # ============================================================================
 # CONFIGURATION - UPDATE THESE PATHS!
@@ -157,10 +200,32 @@ def run_prediction():
     input_opt = np.expand_dims(optical_normalized, axis=0)
     input_sar = np.expand_dims(sar_normalized, axis=0)
     
-    # Load model
-    print(f"\n🧠 Loading model...")
-    model = load_model(MODEL_CHECKPOINT, compile=False)
-    print(f"  ✓ Model loaded")
+    # Get image dimensions
+    _, H, W = optical_data.shape
+    
+    # Build model architecture
+    print(f"\n🧠 Building DSen2-CR model...")
+    input_shape = ((13, H, W), (2, H, W))
+    model = DSen2CR_model(
+        input_shape,
+        batch_per_gpu=1,
+        num_layers=16,
+        feature_size=256,
+        use_cloud_mask=True,
+        include_sar_input=True
+    )
+    print(f"  ✓ Model architecture built")
+    
+    # Load weights
+    print(f"  Loading weights from: {MODEL_CHECKPOINT}")
+    try:
+        model.load_weights(MODEL_CHECKPOINT)
+        print(f"  ✓ Weights loaded successfully")
+    except Exception as e:
+        print(f"  ⚠ Error loading weights: {e}")
+        print(f"  Trying to load as full model...")
+        model = load_model(MODEL_CHECKPOINT, compile=False)
+        print(f"  ✓ Model loaded")
     
     # Run inference
     print(f"\n🚀 Running inference...")
