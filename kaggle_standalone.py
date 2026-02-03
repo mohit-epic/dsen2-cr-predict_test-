@@ -44,15 +44,22 @@ def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256)
         """Custom layer to add cloud mask channel"""
         def __init__(self, **kwargs):
             super(CloudMaskLayer, self).__init__(**kwargs)
+            
+        def compute_output_shape(self, input_shape):
+            # input_shape is (batch, channels, height, width)
+            # return same shape but with channels + 1
+            return (input_shape[0], input_shape[1] + 1, input_shape[2], input_shape[3])
         
         def call(self, inputs):
             # inputs shape: (batch, channels, height, width)
-            batch_size = K.shape(inputs)[0]
-            height = K.shape(inputs)[2]
-            width = K.shape(inputs)[3]
-            # Create zero mask channel
-            zeros = K.zeros((batch_size, 1, height, width))
-            return K.concatenate([inputs, zeros], axis=1)
+            shape = tf.shape(inputs)
+            batch_size = shape[0]
+            height = shape[2]
+            width = shape[3]
+            
+            # Create zero mask channel using TensorFlow ops
+            zeros = tf.zeros((batch_size, 1, height, width), dtype=inputs.dtype)
+            return tf.concat([inputs, zeros], axis=1)
     
     input_opt = Input(shape=input_shape[0])
     input_sar = Input(shape=input_shape[1])
