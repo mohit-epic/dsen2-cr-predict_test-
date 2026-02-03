@@ -44,24 +44,24 @@ K.set_image_data_format('channels_first')
 def configure_tf_session():
     """Configure TensorFlow session for optimal GPU usage"""
     try:
-        # TensorFlow 2.x compatibility
-        if hasattr(tf, '__version__') and int(tf.__version__.split('.')[0]) >= 2:
-            # TF 2.x - use compat.v1 API
-            import tensorflow.compat.v1 as tf1
-            tf1.disable_v2_behavior()
-            config = tf1.ConfigProto()
-            config.gpu_options.allow_growth = True
-            sess = tf1.Session(config=config)
-            tf1.keras.backend.set_session(sess)
-        else:
-            # TF 1.x - original code
+        # Try TensorFlow 2.x first
+        import tensorflow.compat.v1 as tf1
+        tf1.disable_v2_behavior()
+        config = tf1.ConfigProto()
+        config.gpu_options.allow_growth = True
+        sess = tf1.Session(config=config)
+        tf1.keras.backend.set_session(sess)
+        print("✓ TensorFlow session configured (TF 2.x)")
+    except:
+        try:
+            # Fallback to TF 1.x
             config = tf.ConfigProto()
             config.gpu_options.allow_growth = True
             K.tensorflow_backend.set_session(tf.Session(config=config))
-        print("✓ TensorFlow session configured")
-    except Exception as e:
-        print(f"⚠ Could not configure TF session: {e}")
-        print("  Continuing with default TensorFlow settings...")
+            print("✓ TensorFlow session configured (TF 1.x)")
+        except:
+            # Skip configuration - not critical
+            print("ℹ Using default TensorFlow settings (session config skipped)")
 
 
 def load_tiff_image(image_path):
