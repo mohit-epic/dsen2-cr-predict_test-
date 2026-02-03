@@ -1,6 +1,7 @@
 """
 STANDALONE KAGGLE SCRIPT FOR DSen2-CR CLOUD REMOVAL
 Final version - All compatibility issues fixed
+CPU-compatible version using channels_last format
 
 Just copy-paste this entire file into a Kaggle code cell and run!
 """
@@ -17,7 +18,7 @@ import keras.backend as K
 from keras.models import Model
 from keras.layers import Conv2D, Concatenate, Activation, Lambda, Add, Input
 
-K.set_image_data_format('channels_first')
+K.set_image_data_format('channels_last')  # Changed for CPU compatibility
 
 # ============================================================================
 # DSen2-CR MODEL ARCHITECTURE (Simplified for Keras 3.x compatibility)
@@ -34,14 +35,14 @@ def resBlock(input_l, feature_size, kernel_size, scale=0.1):
 
 def DSen2CR_model(input_shape, num_layers=16, feature_size=256):
     """
-    DSen2-CR Model Architecture
+    DSen2-CR Model Architecture (channels_last format)
     Simplified version without cloud mask for Keras 3.x compatibility
     """
-    input_opt = Input(shape=input_shape[0])
-    input_sar = Input(shape=input_shape[1])
+    input_opt = Input(shape=input_shape[0])  # (H, W, 13)
+    input_sar = Input(shape=input_shape[1])  # (H, W, 2)
     
-    # Concatenate optical and SAR inputs
-    x = Concatenate(axis=1)([input_opt, input_sar])
+    # Concatenate optical and SAR inputs along channel axis
+    x = Concatenate(axis=-1)([input_opt, input_sar])  # (H, W, 15)
     
     # Initial convolution
     x = Conv2D(feature_size, (3, 3), kernel_initializer='he_uniform', padding='same')(x)
@@ -52,7 +53,7 @@ def DSen2CR_model(input_shape, num_layers=16, feature_size=256):
         x = resBlock(x, feature_size, kernel_size=[3, 3])
     
     # Final convolution
-    x = Conv2D(input_shape[0][0], (3, 3), kernel_initializer='he_uniform', padding='same')(x)
+    x = Conv2D(input_shape[0][-1], (3, 3), kernel_initializer='he_uniform', padding='same')(x)  # Back to 13 channels
     
     # Long skip connection
     x = Add()([x, input_opt])
@@ -74,39 +75,40 @@ OUTPUT_DIR = '/kaggle/working/output'
 # ============================================================================
 
 def load_tiff_image(image_path):
-    """Load TIFF image and ensure proper shape (C, H, W)"""
+    """Load TIFF image and ensure proper shape (H, W, C) for channels_last"""
     image = tifffile.imread(image_path)
     if image.ndim == 2:
-        image = np.expand_dims(image, axis=0)
+        image = np.expand_dims(image, axis=-1)  # (H, W, 1)
     elif image.ndim == 3:
-        if image.shape[2] < image.shape[0] and image.shape[2] < image.shape[1]:
-            image = np.transpose(image, (2, 0, 1))
+        # If it's (C, H, W), convert to (H, W, C)
+        if image.shape[0] < image.shape[1] and image.shape[0] < image.shape[2]:
+            image = np.transpose(image, (1, 2, 0))
     image[np.isnan(image)] = np.nanmean(image)
     return image.astype('float32')
 
 
 def normalize_sar_image(image, max_val_sar=2):
-    """Normalize SAR image"""
+    """Normalize SAR image (H, W, C format)"""
     clip_min = [-25.0, -32.5]
     clip_max = [0.0, 0.0]
     normalized = np.zeros_like(image)
-    for channel in range(len(image)):
-        data = image[channel]
+    for channel in range(image.shape[-1]):
+        data = image[:, :, channel]
         data = np.clip(data, clip_min[channel], clip_max[channel])
         data -= clip_min[channel]
-        normalized[channel] = max_val_sar * (data / (clip_max[channel] - clip_min[channel]))
+        normalized[:, :, channel] = max_val_sar * (data / (clip_max[channel] - clip_min[channel]))
     return normalized
 
 
 def normalize_optical_image(image, scale=2000):
-    """Normalize optical image"""
+    """Normalize optical image (H, W, C format)"""
     clip_min = [0] * 13
     clip_max = [10000] * 13
     normalized = np.zeros_like(image)
-    for channel in range(len(image)):
-        data = image[channel]
+    for channel in range(image.shape[-1]):
+        data = image[:, :, channel]
         data = np.clip(data, clip_min[channel], clip_max[channel])
-        normalized[channel] = data / scale
+        normalized[:, :, channel] = data / scale
     return normalized
 
 
@@ -127,14 +129,14 @@ def calculate_metrics(pred, ref, scale=2000):
     
     # SSIM
     ssim_values = []
-    for c in range(pred.shape[0]):
-        ssim_val = ssim(ref_scaled[c], pred_scaled[c], data_range=10000.0)
+    for c in range(pred.shape[-1]):
+        ssim_val = ssim(ref_scaled[:, :, c], pred_scaled[:, :, c], data_range=10000.0)
         ssim_values.append(ssim_val)
     ssim_mean = np.mean(ssim_values)
     
     # SAM
-    pred_flat = pred.reshape(pred.shape[0], -1)
-    ref_flat = ref.reshape(ref.shape[0], -1)
+    pred_flat = pred.reshape(-1, pred.shape[-1]).T  # (channels, pixels)
+    ref_flat = ref.reshape(-1, ref.shape[-1]).T
     dots = np.sum(pred_flat * ref_flat, axis=0)
     norms_pred = np.linalg.norm(pred_flat, axis=0)
     norms_ref = np.linalg.norm(ref_flat, axis=0)
@@ -150,10 +152,11 @@ def calculate_metrics(pred, ref, scale=2000):
 
 
 def create_rgb_visualization(image_data, brighten_limit=2000):
-    """Create RGB visualization"""
-    r = np.clip(image_data[3], 0, brighten_limit)
-    g = np.clip(image_data[2], 0, brighten_limit)
-    b = np.clip(image_data[1], 0, brighten_limit)
+    """Create RGB visualization (H, W, C format)"""
+    # Extract RGB bands (indices 3, 2, 1 for bands 4, 3, 2)
+    r = np.clip(image_data[:, :, 3], 0, brighten_limit)
+    g = np.clip(image_data[:, :, 2], 0, brighten_limit)
+    b = np.clip(image_data[:, :, 1], 0, brighten_limit)
     rgb = np.dstack((r, g, b))
     rgb = rgb - np.nanmin(rgb)
     if np.nanmax(rgb) > 0:
@@ -183,10 +186,10 @@ def run_prediction():
     print(f"  SAR shape:     {sar_data.shape}")
     print(f"  Optical shape: {optical_data.shape}")
     
-    if sar_data.shape[0] != 2:
-        raise ValueError(f"SAR must have 2 channels, got {sar_data.shape[0]}")
-    if optical_data.shape[0] != 13:
-        raise ValueError(f"Optical must have 13 channels, got {optical_data.shape[0]}")
+    if sar_data.shape[-1] != 2:
+        raise ValueError(f"SAR must have 2 channels, got {sar_data.shape[-1]}")
+    if optical_data.shape[-1] != 13:
+        raise ValueError(f"Optical must have 13 channels, got {optical_data.shape[-1]}")
     
     # Normalize
     print(f"\n🔧 Preprocessing...")
@@ -198,11 +201,11 @@ def run_prediction():
     input_sar = np.expand_dims(sar_normalized, axis=0)
     
     # Get image dimensions
-    _, H, W = optical_data.shape
+    H, W, _ = optical_data.shape
     
     # Build model architecture
     print(f"\n🧠 Building DSen2-CR model...")
-    input_shape = ((13, H, W), (2, H, W))
+    input_shape = ((H, W, 13), (H, W, 2))  # channels_last format
     model = DSen2CR_model(
         input_shape,
         num_layers=16,
@@ -223,12 +226,8 @@ def run_prediction():
     print(f"\n🚀 Running inference...")
     prediction = model.predict([input_opt, input_sar], batch_size=1, verbose=0)
     
-    # Handle output shape - model outputs (1, 13, H, W)
-    if prediction.shape[1] == 13:
-        output_normalized = prediction[0]
-    else:
-        # If model outputs more channels (e.g., with cloud mask), take first 13
-        output_normalized = prediction[0, 0:13, :, :]
+    # Handle output shape - model outputs (1, H, W, 13)
+    output_normalized = prediction[0]  # (H, W, 13)
     
     output_denormalized = denormalize_optical_image(output_normalized)
     
@@ -268,9 +267,10 @@ def run_prediction():
     # Save outputs
     print(f"\n💾 Saving outputs...")
     
-    # Save TIFFs
-    tifffile.imwrite(os.path.join(OUTPUT_DIR, 'output_13bands.tif'), output_denormalized)
-    rgb_bands = np.stack([output_denormalized[3], output_denormalized[2], output_denormalized[1]], axis=0)
+    # Save TIFFs (convert to channels_first for standard TIFF format)
+    output_chw = np.transpose(output_denormalized, (2, 0, 1))  # (13, H, W)
+    tifffile.imwrite(os.path.join(OUTPUT_DIR, 'output_13bands.tif'), output_chw)
+    rgb_bands = np.stack([output_denormalized[:, :, 3], output_denormalized[:, :, 2], output_denormalized[:, :, 1]], axis=0)
     tifffile.imwrite(os.path.join(OUTPUT_DIR, 'output_rgb.tif'), rgb_bands)
     
     # Save PNG visualization
