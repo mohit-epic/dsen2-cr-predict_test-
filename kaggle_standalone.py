@@ -24,66 +24,69 @@ K.set_image_data_format('channels_first')
 # DSen2-CR MODEL ARCHITECTURE (EXACT MATCH + KERAS 3.x FIX)
 # ============================================================================
 
-def resBlock(input_l, feature_size, kernel_size, scale=0.1):
-    """Residual Block"""
-    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same')(input_l)
-    tmp = Activation('relu')(tmp)
-    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same')(tmp)
-    tmp = Lambda(lambda x: x * scale)(tmp)
-    return Add()([input_l, tmp])
+def resBlock(input_l, feature_size, kernel_size, scale=0.1, idx=0):
+    """Residual Block with explicit naming"""
+    # Names based on HDF5 keys: conv2d_{2*i}, activation_{i}, conv2d_{2*i+1}, lambda_{i}, add_{i}
+    # We need to map the loop index 'i' (0 to 15) to correct layer numbers
+    
+    # In file, ResBlocks seem to use conv2d_2 to conv2d_33 (32 layers)
+    # block 0 (i=0): conv2d_2, conv2d_3
+    # block 1 (i=1): conv2d_4, conv2d_5
+    # ...
+    
+    layer_num_1 = 2 + (idx * 2)
+    layer_num_2 = 3 + (idx * 2)
+    # activations seem to start at 2? keys show activation_1 to activation_17
+    # activation_1 is likely the first conv
+    # so resblock activations are 2..17
+    act_num = 2 + idx
+    
+    # Lambda keys: lambda_1 to lambda_17
+    # lambda_1 might be first resblock?
+    # keys show lambda_1..17. There are 16 resblocks. Maybe 1-16 are resblocks.
+    lam_num = 1 + idx
+    
+    # Add keys: add_1 to add_17
+    # add_1 to 16 are resblocks. add_17 is final skip.
+    add_num = 1 + idx
+
+    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same', name=f'conv2d_{layer_num_1}')(input_l)
+    tmp = Activation('relu', name=f'activation_{act_num}')(tmp)
+    tmp = Conv2D(feature_size, kernel_size, kernel_initializer='he_uniform', padding='same', name=f'conv2d_{layer_num_2}')(tmp)
+    tmp = Lambda(lambda x: x * scale, name=f'lambda_{lam_num}')(tmp)
+    return Add(name=f'add_{add_num}')([input_l, tmp])
 
 
 def DSen2CR_model(input_shape, batch_per_gpu=1, num_layers=16, feature_size=256):
     """
-    DSen2-CR Model Architecture - Keras 3.x compatible version
-    Outputs 27 channels: 13 predicted bands + 13 input bands + 1 cloud mask
+    DSen2-CR Model Architecture - EXACTLY MATCHING HDF5 KEYS
     """
-    from keras.layers import Layer
     
-    class CloudMaskLayer(Layer):
-        """Custom layer to add cloud mask channel"""
-        def __init__(self, **kwargs):
-            super(CloudMaskLayer, self).__init__(**kwargs)
-            
-        def compute_output_shape(self, input_shape):
-            # input_shape is (batch, channels, height, width)
-            # return same shape but with channels + 1
-            return (input_shape[0], input_shape[1] + 1, input_shape[2], input_shape[3])
-        
-        def call(self, inputs):
-            # inputs shape: (batch, channels, height, width)
-            shape = tf.shape(inputs)
-            batch_size = shape[0]
-            height = shape[2]
-            width = shape[3]
-            
-            # Create zero mask channel using TensorFlow ops
-            zeros = tf.zeros((batch_size, 1, height, width), dtype=inputs.dtype)
-            return tf.concat([inputs, zeros], axis=1)
-    
-    input_opt = Input(shape=input_shape[0])
-    input_sar = Input(shape=input_shape[1])
+    input_opt = Input(shape=input_shape[0], name='input_1') # Guessing name
+    input_sar = Input(shape=input_shape[1], name='input_2') # Guessing name
     
     # Concatenate optical and SAR inputs
-    x = Concatenate(axis=1)([input_opt, input_sar])
+    # Keys show concatenate_1
+    x = Concatenate(axis=1, name='concatenate_1')([input_opt, input_sar])
     
-    # Initial convolution
-    x = Conv2D(feature_size, (3, 3), kernel_initializer='he_uniform', padding='same')(x)
-    x = Activation('relu')(x)
+    # Initial convolution (conv2d_1, activation_1)
+    x = Conv2D(feature_size, (3, 3), kernel_initializer='he_uniform', padding='same', name='conv2d_1')(x)
+    x = Activation('relu', name='activation_1')(x)
     
     # Residual blocks
     for i in range(num_layers):
-        x = resBlock(x, feature_size, kernel_size=[3, 3])
+        x = resBlock(x, feature_size, kernel_size=[3, 3], idx=i)
     
-    # Final convolution
-    x = Conv2D(input_shape[0][0], (3, 3), kernel_initializer='he_uniform', padding='same')(x)
+    # Final convolution (conv2d_34)
+    # 2 + 16*2 = 34. Correct.
+    x = Conv2D(input_shape[0][0], (3, 3), kernel_initializer='he_uniform', padding='same', name='conv2d_34')(x)
     
     # Long skip connection
-    x = Add()([x, input_opt])
+    # Last add key is add_17.
+    x = Add(name='add_17')([x, input_opt])
     
-    # Add cloud mask output - concatenate predicted + input + mask
-    x = Concatenate(axis=1)([x, input_opt])  # (batch, 26, H, W)
-    x = CloudMaskLayer()(x)  # (batch, 27, H, W)
+    # Note: No CloudMaskLayer/Concatenation at end based on weight keys.
+    # The weights end at conv2d_34 (13 output channels).
     
     model = Model(inputs=[input_opt, input_sar], outputs=x)
     return model
