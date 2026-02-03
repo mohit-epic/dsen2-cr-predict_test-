@@ -17,7 +17,7 @@ import os
 import sys
 import argparse
 import numpy as np
-import rasterio
+import tifffile
 import matplotlib.pyplot as plt
 from pathlib import Path
 import glob
@@ -59,8 +59,15 @@ def load_tiff_image(image_path):
     Returns:
         image: numpy array with shape (channels, height, width)
     """
-    with rasterio.open(image_path, driver='GTiff') as src:
-        image = src.read()
+    image = tifffile.imread(image_path)
+    
+    # Ensure proper shape: (channels, height, width)
+    if image.ndim == 2:
+        image = np.expand_dims(image, axis=0)
+    elif image.ndim == 3:
+        # Check if it's (H, W, C) and convert to (C, H, W)
+        if image.shape[2] < image.shape[0] and image.shape[2] < image.shape[1]:
+            image = np.transpose(image, (2, 0, 1))
     
     # Handle NaN values
     image[np.isnan(image)] = np.nanmean(image)
@@ -498,31 +505,15 @@ def test_single_image(image_path, sar_path, model_checkpoint, output_dir,
     # Save outputs
     print(f"\n💾 Saving outputs...")
     
-    # 1. Save full 13-band TIFF
+    # 1. Save full 13-band TIFF (using tifffile)
     output_tiff_path = os.path.join(output_dir, 'output_cloudremoved_13bands.tif')
-    
-    # Get georeference from input
-    with rasterio.open(image_path) as src:
-        profile = src.profile.copy()
-        profile.update({
-            'count': 13,
-            'dtype': 'float32',
-            'compress': 'lzw'
-        })
-    
-    with rasterio.open(output_tiff_path, 'w', **profile) as dst:
-        dst.write(output_denormalized)
-    
+    tifffile.imwrite(output_tiff_path, output_denormalized.astype('float32'))
     print(f"  ✓ Saved 13-band TIFF: {output_tiff_path}")
     
-    # 2. Save RGB composite TIFF
+    # 2. Save RGB composite TIFF (using tifffile)
     rgb_bands = np.stack([output_denormalized[3], output_denormalized[2], output_denormalized[1]], axis=0)
     rgb_tiff_path = os.path.join(output_dir, 'output_cloudremoved_rgb.tif')
-    
-    profile.update({'count': 3})
-    with rasterio.open(rgb_tiff_path, 'w', **profile) as dst:
-        dst.write(rgb_bands)
-    
+    tifffile.imwrite(rgb_tiff_path, rgb_bands.astype('float32'))
     print(f"  ✓ Saved RGB composite TIFF: {rgb_tiff_path}")
     
     # 3. Create and save RGB visualization
